@@ -500,53 +500,82 @@ static int conn_handle_ports (uint16_t port_local, uint16_t port_remote, uint8_t
 typedef struct value_list_batch_s {
     size_t size;
     size_t cur;
-    value_list_t buffer[1];       /* Allocated to have size entries */
+    value_list_t *buffer;
+    value_t *values;
 } value_list_batch_t;
 
 static value_list_batch_t *value_list_batch_create(size_t size)
 {
-    value_list_batch_t *ret =
-        malloc(sizeof(value_list_batch_t) + (size - 1) * sizeof(value_list_t));
+    value_list_batch_t *b;
+    value_list_t vl = VALUE_LIST_INIT;
     size_t i;
-    const value_list_t vl_init = VALUE_LIST_INIT;
+
     if (size < 4) {
-        ERROR("Buffer size %zu < 4; using 4", size);
-        size = 4;
+      WARNING ("tcpconns plugin: Buffer size %zu < 4; using 4", size);
+      size = 4;
     }
-    ret->size = size;
+
+    b = malloc (sizeof (*b));
+    if (b == NULL)
+      return NULL;
+
+    b->size = size;
+    b->cur = 0;
+
+    b->buffer = calloc (size, sizeof (*b->buffer));
+    if (b->buffer == NULL)
+    {
+      sfree (b);
+      return (NULL);
+    }
+
+    b->values = calloc (size, sizeof (*b->values));
+    if (b->values == NULL)
+    {
+      sfree (b->buffer);
+      sfree (b);
+      return (NULL);
+    }
+
+    sstrncpy (vl.host, hostname_g, sizeof (vl.host));
+    sstrncpy (vl.plugin, "tcpconns", sizeof (vl.plugin));
+    sstrncpy (vl.type, "tcp_connections_perf", sizeof (vl.type));
+    vl.values_len = 1;
+
     for (i = 0; i < size; i++)
-        ret->buffer[i] = vl_init;
-    ret->cur = 0;
-    return ret;
+    {
+      memcpy (&b->buffer[i], &vl, sizeof (vl));
+      b->buffer[i].values = b->values + i;
+    }
+
+    return b;
 }
 
 static void value_list_batch_flush(value_list_batch_t *batch)
 {
     size_t i;
+
     /* TODO(arielshaqed): Use new batched reporting API! */
     for (i = 0; i < batch->cur; i++) {
         plugin_dispatch_values (&batch->buffer[i]);
     }
-    for (i = 0; i < batch->cur; i++) {
-        free(batch->buffer[i].values);
-        /* Also free meta? */
-    }
+
     batch->cur = 0;
 }
 
 static void value_list_batch_free(value_list_batch_t *batch)
 {
-    value_list_batch_flush(batch);
-    free(batch);
+  value_list_batch_flush(batch);
+
+  sfree (batch->buffer);
+  sfree (batch->values);
+  sfree (batch);
 }
 
-static int value_list_batch_maybe_flush(value_list_batch_t *batch)
+static void value_list_batch_maybe_flush(value_list_batch_t *batch)
 {
-    if (batch->cur >= batch->size) {
-        value_list_batch_flush(batch);
-        return 1;
-    }
-    return 0;
+  if (batch->cur >= batch->size)
+    value_list_batch_flush(batch);
 }
 
 /* Returns a value_list to populate with values; must call
@@ -580,23 +609,18 @@ static void conn_handle_tcpi(
     const char src[], uint16_t sport, const char dst[], uint16_t dport,
     const struct tcp_info* tcpi)
 {
-    value_list_t *vl = value_list_batch_get(batch);
-    const char *state_name = TCP_STATE_MIN <= state && state <= TCP_STATE_MAX ?
-        tcp_state[state] : "UNKNOWN";
-    DEBUG ("%s:%hu -> %s:%hu  %s   :  %u",
-           src, sport, dst, dport, state_name, tcpi->tcpi_rtt);
+  value_list_t *vl = value_list_batch_get(batch);
+  char const *state_name = TCP_STATE_MIN <= state && state <= TCP_STATE_MAX
+    ? tcp_state[state]
+    : "UNKNOWN";
 
-    vl->values = calloc(1, sizeof(value_t));
-    vl->values_len = 1;
-    sstrncpy (vl->host, hostname_g, sizeof (vl->host));
-    sstrncpy (vl->plugin, "tcpconns", sizeof (vl->plugin));
-    snprintf(vl->plugin_instance, sizeof(vl->plugin_instance),
-	"%s:%u_%s:%u_%s", src, sport, dst, dport, state_name);
-    sstrncpy (vl->type, "tcp_connections_perf", sizeof (vl->type));
-    /* Types must match definition in types.db */
-    vl->values[0].gauge = tcpi->tcpi_rtt;
+  assert (vl->values != NULL);
 
-    value_list_batch_release(batch);
+  snprintf(vl->plugin_instance, sizeof(vl->plugin_instance),
+      "%s:%u_%s:%u_%s", src, sport, dst, dport, state_name);
+  vl->values[0].gauge = tcpi->tcpi_rtt;
+
+  value_list_batch_release (batch);
 } /* conn_handle_tcpi */
 
 /* Returns tcp_info in an rtattr in h. Returns NULL if all
