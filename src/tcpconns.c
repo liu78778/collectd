@@ -327,7 +327,7 @@ static void conn_submit_port_entry (port_entry_t *pe)
       || (pe->flags & PORT_COLLECT_LOCAL))
   {
     ssnprintf (vl.plugin_instance, sizeof (vl.plugin_instance),
-	"%"PRIu16"-local", pe->port);
+        "%"PRIu16"-local", pe->port);
 
     for (i = 1; i <= TCP_STATE_MAX; i++)
     {
@@ -342,7 +342,7 @@ static void conn_submit_port_entry (port_entry_t *pe)
   if (pe->flags & PORT_COLLECT_REMOTE)
   {
     ssnprintf (vl.plugin_instance, sizeof (vl.plugin_instance),
-	"%"PRIu16"-remote", pe->port);
+        "%"PRIu16"-remote", pe->port);
 
     for (i = 1; i <= TCP_STATE_MAX; i++)
     {
@@ -427,18 +427,18 @@ static void conn_reset_port_entry (void)
     /* If this entry was created while reading the files (ant not when handling
      * the configuration) remove it now. */
     if ((pe->flags & (PORT_COLLECT_LOCAL
-	    | PORT_COLLECT_REMOTE
-	    | PORT_IS_LISTENING)) == 0)
+            | PORT_COLLECT_REMOTE
+            | PORT_IS_LISTENING)) == 0)
     {
       port_entry_t *next = pe->next;
 
       DEBUG ("tcpconns plugin: Removing temporary entry "
-	  "for listening port %"PRIu16, pe->port);
+          "for listening port %"PRIu16, pe->port);
 
       if (prev == NULL)
-	port_list_head = next;
+        port_list_head = next;
       else
-	prev->next = next;
+        prev->next = next;
 
       sfree (pe);
       pe = next;
@@ -465,7 +465,7 @@ static int conn_handle_ports (uint16_t port_local, uint16_t port_remote, uint8_t
      )
   {
     NOTICE ("tcpconns plugin: Ignoring connection with "
-	"unknown state 0x%02"PRIx8".", state);
+        "unknown state 0x%02"PRIx8".", state);
     return (-1);
   }
 
@@ -553,14 +553,14 @@ static int value_list_batch_maybe_flush(value_list_batch_t *batch)
  * value_list_batch_release before calling again. */
 static value_list_t *value_list_batch_get(value_list_batch_t *batch)
 {
-    value_list_batch_maybe_flush(batch);
-    return &batch->buffer[batch->cur];
+  value_list_batch_maybe_flush(batch);
+  return &batch->buffer[batch->cur];
 }
 
 static void value_list_batch_release(value_list_batch_t *batch)
 {
   batch->cur++;
-  value_list_batch_maybe_flush(batch);
+  value_list_batch_maybe_flush (batch);
 }
 
 /* Return 1 if tcpi should be reported */
@@ -639,8 +639,8 @@ static int conn_read_netlink (void)
   if (fd < 0)
   {
     ERROR ("tcpconns plugin: conn_read_netlink: socket(AF_NETLINK, SOCK_RAW, "
-	"NETLINK_INET_DIAG) failed: %s",
-	sstrerror (errno, buf, sizeof (buf)));
+        "NETLINK_INET_DIAG) failed: %s",
+        sstrerror (errno, buf, sizeof (buf)));
     return (-1);
   }
 
@@ -666,7 +666,7 @@ static int conn_read_netlink (void)
   if (send (fd, &req, sizeof(req), /* flags = */ 0) < 0)
   {
     ERROR ("tcpconns plugin: conn_read_netlink: send(2) failed: %s",
-	sstrerror (errno, buf, sizeof (buf)));
+        sstrerror (errno, buf, sizeof (buf)));
     close (fd);
     value_list_batch_free(batch);
     return (-1);
@@ -684,7 +684,7 @@ static int conn_read_netlink (void)
         continue;
 
       ERROR ("tcpconns plugin: conn_read_netlink: recv(2) failed: %s",
-	  sstrerror (errno, buf, sizeof (buf)));
+          sstrerror (errno, buf, sizeof (buf)));
       close (fd);
       value_list_batch_free(batch);
       return (-1);
@@ -693,7 +693,7 @@ static int conn_read_netlink (void)
     {
       close (fd);
       DEBUG ("tcpconns plugin: conn_read_netlink: Unexpected zero-sized "
-	  "reply from netlink socket.");
+          "reply from netlink socket.");
       close (fd);
       value_list_batch_free(batch);
       return (0);
@@ -707,28 +707,28 @@ static int conn_read_netlink (void)
         INFO ("tcpconns plugin: conn_read_netlink: sequence numbers mismatch "
             "received %u != expected %u",
             h->nlmsg_seq, sequence_number);
-	h = NLMSG_NEXT(h, status);
-	continue;
+        h = NLMSG_NEXT(h, status);
+        continue;
       }
 
       if (h->nlmsg_type == NLMSG_DONE)
       {
         DEBUG ("tcpconns plugin: conn_read_netlink: done!");
-	close (fd);
-	value_list_batch_free(batch);
-	return (0);
+        close (fd);
+        value_list_batch_free(batch);
+        return (0);
       }
       else if (h->nlmsg_type == NLMSG_ERROR)
       {
-	struct nlmsgerr *msg_error;
+        struct nlmsgerr *msg_error;
 
-	msg_error = NLMSG_DATA(h);
-	WARNING ("tcpconns plugin: conn_read_netlink: Received error %i.",
-	    msg_error->error);
+        msg_error = NLMSG_DATA(h);
+        WARNING ("tcpconns plugin: conn_read_netlink: Received error %i.",
+            msg_error->error);
 
-	close (fd);
-	value_list_batch_free(batch);
-	return (1);
+        close (fd);
+        value_list_batch_free(batch);
+        return (1);
       }
 
       /* TODO(arielshaqed): Fix: Check data length around NLMSG_DATA()! */
@@ -736,10 +736,10 @@ static int conn_read_netlink (void)
       {
 	struct tcp_info *tcpi = get_tcp_info(h);
         u_int8_t state = r->idiag_state;
-	unsigned short sport = ntohs(r->id.idiag_sport);
-	unsigned short dport = ntohs(r->id.idiag_dport);
+        unsigned short sport = ntohs(r->id.idiag_sport);
+        unsigned short dport = ntohs(r->id.idiag_dport);
 
-	/* This code does not (need to) distinguish between IPv4 and IPv6. */
+        /* This code does not (need to) distinguish between IPv4 and IPv6. */
         if (report_by_ports)
           conn_handle_ports (sport, dport, state);
 
@@ -747,14 +747,14 @@ static int conn_read_netlink (void)
           if (r->idiag_state != TCP_STATE_LISTEN && tcpi && filter_tcpi(tcpi)) {
 	    char src[INET6_ADDRSTRLEN];
 	    char dst[INET6_ADDRSTRLEN];
-	    if (!inet_ntop(r->idiag_family, r->id.idiag_src, src, sizeof(src)))
+            if (!inet_ntop(r->idiag_family, r->id.idiag_src, src, sizeof(src)))
               strncpy(src, "<UNKNOWN>", sizeof(src));
-	    if (!inet_ntop(r->idiag_family, r->id.idiag_dst, dst, sizeof(dst)))
+            if (!inet_ntop(r->idiag_family, r->id.idiag_dst, dst, sizeof(dst)))
               strncpy(dst, "<UNKNOWN>", sizeof(dst));
-	    conn_handle_tcpi (
-                batch, r->idiag_state, src, sport, dst, dport, tcpi);
+
+            conn_handle_tcpi (batch, r->idiag_state, src, sport, dst, dport, tcpi);
           }
-	}
+        }
       }
 
       h = NLMSG_NEXT(h, status);
@@ -864,26 +864,26 @@ static int conn_config (const char *key, const char *value)
   else if ((strcasecmp (key, "LocalPort") == 0)
       || (strcasecmp (key, "RemotePort") == 0))
   {
-      port_entry_t *pe;
-      int port = atoi (value);
+    port_entry_t *pe;
+    int port = atoi (value);
 
-      if ((port < 1) || (port > 65535))
-      {
-	ERROR ("tcpconns plugin: Invalid port: %i", port);
-	return (1);
-      }
+    if ((port < 1) || (port > 65535))
+    {
+      ERROR ("tcpconns plugin: Invalid port: %i", port);
+      return (1);
+    }
 
-      pe = conn_get_port_entry ((uint16_t) port, 1 /* create */);
-      if (pe == NULL)
-      {
-	ERROR ("tcpconns plugin: conn_get_port_entry failed.");
-	return (1);
-      }
+    pe = conn_get_port_entry ((uint16_t) port, 1 /* create */);
+    if (pe == NULL)
+    {
+      ERROR ("tcpconns plugin: conn_get_port_entry failed.");
+      return (1);
+    }
 
-      if (strcasecmp (key, "LocalPort") == 0)
-	pe->flags |= PORT_COLLECT_LOCAL;
-      else
-	pe->flags |= PORT_COLLECT_REMOTE;
+    if (strcasecmp (key, "LocalPort") == 0)
+      pe->flags |= PORT_COLLECT_LOCAL;
+    else
+      pe->flags |= PORT_COLLECT_REMOTE;
   }
   else if (strcasecmp (key, "AllPortsSummary") == 0)
   {
@@ -962,17 +962,17 @@ static int conn_read (void)
     if (status == 0)
     {
       INFO ("tcpconns plugin: Reading from netlink succeeded. "
-	  "Will use the netlink method from now on.");
+          "Will use the netlink method from now on.");
       linux_source = SRC_NETLINK;
     }
     else
     {
       INFO ("tcpconns plugin: Reading from netlink failed. "
-	  "Will read from /proc from now on.");
+          "Will read from /proc from now on.");
       linux_source = SRC_PROC;
       if (report_by_connections)
         ERROR ("tcpconns plugin: "
-               "Ignore ReportByConnections (not reading Netlink inet_diag)");
+            "Ignore ReportByConnections (not reading Netlink inet_diag)");
 
       /* return success here to avoid the "plugin failed" message. */
       return (0);
@@ -1048,11 +1048,11 @@ static int conn_read (void)
       continue;
 
     if (((inp->inp_vflag & INP_IPV4) == 0)
-	&& ((inp->inp_vflag & INP_IPV6) == 0))
+        && ((inp->inp_vflag & INP_IPV6) == 0))
       continue;
 
     conn_handle_ports (ntohs (inp->inp_lport), ntohs (inp->inp_fport),
-	tp->t_state);
+        tp->t_state);
   } /* for (in_ptr) */
 
   in_orig = NULL;
@@ -1074,7 +1074,7 @@ static int kread (u_long addr, void *buf, int size)
   if (status != size)
   {
     ERROR ("tcpconns plugin: kvm_read failed (got %i, expected %i): %s\n",
-	status, size, kvm_geterr (kvmd));
+        status, size, kvm_geterr (kvmd));
     return (-1);
   }
   return (0);
@@ -1108,7 +1108,7 @@ static int conn_init (void)
   if (nl[N_TCBTABLE].n_type == 0)
   {
     ERROR ("tcpconns plugin: Error looking up kernel's namelist: "
-	"N_TCBTABLE is invalid.");
+        "N_TCBTABLE is invalid.");
     return (-1);
   }
 
@@ -1142,8 +1142,8 @@ static int conn_read (void)
   next = (struct inpcb *)TAILQ_FIRST (&table.inpt_queue);
   while (next)
 #else
-  /* Get the `head' pcb */
-  head = (struct inpcb *) &(inpcbtable_ptr->inpt_queue);
+    /* Get the `head' pcb */
+    head = (struct inpcb *) &(inpcbtable_ptr->inpt_queue);
   /* Get the first pcb */
   next = (struct inpcb *)CIRCLEQ_FIRST (&table.inpt_queue);
 
@@ -1167,10 +1167,10 @@ static int conn_read (void)
       continue; /* XXX see netbsd/src/usr.bin/netstat/inet6.c */
 #else
     if (!(inpcb.inp_flags & INP_IPV6)
-	&& (inet_lnaof(inpcb.inp_laddr) == INADDR_ANY))
+        && (inet_lnaof(inpcb.inp_laddr) == INADDR_ANY))
       continue;
     if ((inpcb.inp_flags & INP_IPV6)
-	&& IN6_IS_ADDR_UNSPECIFIED (&inpcb.inp_laddr6))
+        && IN6_IS_ADDR_UNSPECIFIED (&inpcb.inp_laddr6))
       continue;
 #endif
 
@@ -1246,18 +1246,18 @@ static int conn_read (void)
 
 void module_register (void)
 {
-	plugin_register_config ("tcpconns", conn_config,
-			config_keys, config_keys_num);
+  plugin_register_config ("tcpconns", conn_config,
+      config_keys, config_keys_num);
 #if KERNEL_LINUX
-	plugin_register_init ("tcpconns", conn_init);
+  plugin_register_init ("tcpconns", conn_init);
 #elif HAVE_SYSCTLBYNAME
-	/* no initialization */
+  /* no initialization */
 #elif HAVE_LIBKVM_NLIST
-	plugin_register_init ("tcpconns", conn_init);
+  plugin_register_init ("tcpconns", conn_init);
 #elif KERNEL_AIX
-	/* no initialization */
+  /* no initialization */
 #endif
-	plugin_register_read ("tcpconns", conn_read);
+  plugin_register_read ("tcpconns", conn_read);
 } /* void module_register */
 
 /*
