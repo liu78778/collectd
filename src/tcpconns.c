@@ -604,8 +604,7 @@ static int filter_tcpi(const struct tcp_info* tcpi)
 }
 
 /* Update entries for specified connections.  May call conn_buffer_flush. */
-static void conn_handle_tcpi(
-    value_list_batch_t *batch, uint8_t state,
+static void conn_handle_tcpi(value_list_batch_t *batch, uint8_t state,
     const char src[], uint16_t sport, const char dst[], uint16_t dport,
     const struct tcp_info* tcpi)
 {
@@ -631,15 +630,18 @@ static struct tcp_info *get_tcp_info(struct nlmsghdr *h)
   struct inet_diag_msg *r = NLMSG_DATA(h);
   ssize_t remaining_len = h->nlmsg_len - NLMSG_LENGTH(sizeof(*r));
   struct rtattr *attr = (struct rtattr*) (r + 1);
-  for (;
-       remaining_len > 0 && RTA_OK(attr, remaining_len);
-       attr = RTA_NEXT(attr, remaining_len)) {
-      DEBUG ("Type = %d ; %zd bytes remaining", attr->rta_type, remaining_len);
-    if (attr->rta_type == INET_DIAG_INFO) {
+
+  while (remaining_len > 0 && RTA_OK(attr, remaining_len))
+  {
+    DEBUG ("tcpconns plugin: rta_type = %d; %zd bytes remaining",
+        attr->rta_type, remaining_len);
+
+    if (attr->rta_type == INET_DIAG_INFO)
       return RTA_DATA(attr);
-      break;
-    }
+
+    attr = RTA_NEXT(attr, remaining_len);
   }
+
   return NULL;
 } /* get_tcp_info */
 
