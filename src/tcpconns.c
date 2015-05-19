@@ -593,7 +593,7 @@ static void value_list_batch_release(value_list_batch_t *batch)
 }
 
 /* Return 1 if tcpi should be reported */
-static int filter_tcpi(const struct tcp_info* tcpi)
+static _Bool filter_tcpi(const struct tcp_info* tcpi)
 {
   /* Skip last ACK sent, it's documented "Not remembered, sorry." */
   return connections_age_limit_msecs < 0 ||
@@ -760,7 +760,6 @@ static int conn_read_netlink (void)
       /* TODO(arielshaqed): Fix: Check data length around NLMSG_DATA()! */
       r = NLMSG_DATA(h);
       {
-	struct tcp_info *tcpi = get_tcp_info(h);
         u_int8_t state = r->idiag_state;
         unsigned short sport = ntohs(r->id.idiag_sport);
         unsigned short dport = ntohs(r->id.idiag_dport);
@@ -769,10 +768,15 @@ static int conn_read_netlink (void)
         if (report_by_ports)
           conn_handle_ports (sport, dport, state);
 
-        if (report_by_connections) {
-          if (r->idiag_state != TCP_STATE_LISTEN && tcpi && filter_tcpi(tcpi)) {
-	    char src[INET6_ADDRSTRLEN];
-	    char dst[INET6_ADDRSTRLEN];
+        if (report_by_connections)
+        {
+          struct tcp_info *tcpi = get_tcp_info(h);
+
+          if ((r->idiag_state != TCP_STATE_LISTEN) && (tcpi != NULL) && filter_tcpi (tcpi))
+          {
+            char src[INET6_ADDRSTRLEN];
+            char dst[INET6_ADDRSTRLEN];
+
             if (!inet_ntop(r->idiag_family, r->id.idiag_src, src, sizeof(src)))
               strncpy(src, "<UNKNOWN>", sizeof(src));
             if (!inet_ntop(r->idiag_family, r->id.idiag_dst, dst, sizeof(dst)))
