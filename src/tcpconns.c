@@ -496,102 +496,6 @@ static int conn_handle_ports (uint16_t port_local, uint16_t port_remote, uint8_t
 #if KERNEL_LINUX
 
 #if HAVE_STRUCT_LINUX_INET_DIAG_REQ
-/* Batched reporting of value_list_t  */
-typedef struct value_list_batch_s {
-    size_t size;
-    size_t cur;
-    value_list_t *buffer;
-    value_t *values;
-} value_list_batch_t;
-
-static value_list_batch_t *value_list_batch_create(size_t size)
-{
-    value_list_batch_t *b;
-    value_list_t vl = VALUE_LIST_INIT;
-    size_t i;
-
-    if (size < 4) {
-      WARNING ("tcpconns plugin: Buffer size %zu < 4; using 4", size);
-      size = 4;
-    }
-
-    b = malloc (sizeof (*b));
-    if (b == NULL)
-      return NULL;
-
-    b->size = size;
-    b->cur = 0;
-
-    b->buffer = calloc (size, sizeof (*b->buffer));
-    if (b->buffer == NULL)
-    {
-      sfree (b);
-      return (NULL);
-    }
-
-    b->values = calloc (size, sizeof (*b->values));
-    if (b->values == NULL)
-    {
-      sfree (b->buffer);
-      sfree (b);
-      return (NULL);
-    }
-
-    sstrncpy (vl.host, hostname_g, sizeof (vl.host));
-    sstrncpy (vl.plugin, "tcpconns", sizeof (vl.plugin));
-    sstrncpy (vl.type, "tcp_connections_perf", sizeof (vl.type));
-    vl.values_len = 1;
-
-    for (i = 0; i < size; i++)
-    {
-      memcpy (&b->buffer[i], &vl, sizeof (vl));
-      b->buffer[i].values = b->values + i;
-    }
-
-    return b;
-}
-
-static void value_list_batch_flush(value_list_batch_t *batch)
-{
-    size_t i;
-
-    /* TODO(arielshaqed): Use new batched reporting API! */
-    for (i = 0; i < batch->cur; i++) {
-        plugin_dispatch_values (&batch->buffer[i]);
-    }
-
-    batch->cur = 0;
-}
-
-static void value_list_batch_free(value_list_batch_t *batch)
-{
-  value_list_batch_flush(batch);
-
-  sfree (batch->buffer);
-  sfree (batch->values);
-  sfree (batch);
-}
-
-static void value_list_batch_maybe_flush(value_list_batch_t *batch)
-{
-  if (batch->cur >= batch->size)
-    value_list_batch_flush(batch);
-}
-
-/* Returns a value_list to populate with values; must call
- * value_list_batch_release before calling again. */
-static value_list_t *value_list_batch_get(value_list_batch_t *batch)
-{
-  value_list_batch_maybe_flush(batch);
-  return &batch->buffer[batch->cur];
-}
-
-static void value_list_batch_release(value_list_batch_t *batch)
-{
-  batch->cur++;
-  value_list_batch_maybe_flush (batch);
-}
-
 /* Return 1 if tcpi should be reported */
 static _Bool filter_tcpi(const struct tcp_info* tcpi)
 {
@@ -604,11 +508,10 @@ static _Bool filter_tcpi(const struct tcp_info* tcpi)
 }
 
 /* Update entries for specified connections.  May call conn_buffer_flush. */
-static void conn_handle_tcpi(value_list_batch_t *batch, uint8_t state,
+static void conn_handle_tcpi(value_list_t *vl, uint8_t state,
     const char src[], uint16_t sport, const char dst[], uint16_t dport,
     const struct tcp_info* tcpi)
 {
-  value_list_t *vl = value_list_batch_get(batch);
   char const *state_name = TCP_STATE_MIN <= state && state <= TCP_STATE_MAX
     ? tcp_state[state]
     : "UNKNOWN";
@@ -619,7 +522,7 @@ static void conn_handle_tcpi(value_list_batch_t *batch, uint8_t state,
       "%s:%u_%s:%u_%s", src, sport, dst, dport, state_name);
   vl->values[0].gauge = tcpi->tcpi_rtt;
 
-  value_list_batch_release (batch);
+  plugin_dispatch_values (vl);
 } /* conn_handle_tcpi */
 
 /* Returns tcp_info in an rtattr in h. Returns NULL if all
@@ -633,9 +536,6 @@ static struct tcp_info *get_tcp_info(struct nlmsghdr *h)
 
   while (remaining_len > 0 && RTA_OK(attr, remaining_len))
   {
-    DEBUG ("tcpconns plugin: rta_type = %d; %zd bytes remaining",
-        attr->rta_type, remaining_len);
-
     if (attr->rta_type == INET_DIAG_INFO)
       return RTA_DATA(attr);
 
@@ -656,8 +556,16 @@ static int conn_read_netlink (void)
   struct sockaddr_nl nladdr;
   struct nlreq req;
   struct inet_diag_msg *r;
-  value_list_batch_t *batch = value_list_batch_create(2048);
   char buf[32768];
+
+  value_t by_conn_value;
+  value_list_t by_conn_vl = VALUE_LIST_INIT;
+
+  sstrncpy (by_conn_vl.host, hostname_g, sizeof (by_conn_vl.host));
+  sstrncpy (by_conn_vl.plugin, "tcpconns", sizeof (by_conn_vl.plugin));
+  sstrncpy (by_conn_vl.type, "tcp_connections_perf", sizeof (by_conn_vl.type));
+  by_conn_vl.values = &by_conn_value;
+  by_conn_vl.values_len = 1;
 
   /* If this fails, it's likely a permission problem. We'll fall back to
    * reading this information from files below. */
@@ -694,7 +602,6 @@ static int conn_read_netlink (void)
     ERROR ("tcpconns plugin: conn_read_netlink: send(2) failed: %s",
         sstrerror (errno, buf, sizeof (buf)));
     close (fd);
-    value_list_batch_free(batch);
     return (-1);
   }
 
@@ -712,7 +619,6 @@ static int conn_read_netlink (void)
       ERROR ("tcpconns plugin: conn_read_netlink: recv(2) failed: %s",
           sstrerror (errno, buf, sizeof (buf)));
       close (fd);
-      value_list_batch_free(batch);
       return (-1);
     }
     else if (status == 0)
@@ -721,7 +627,6 @@ static int conn_read_netlink (void)
       DEBUG ("tcpconns plugin: conn_read_netlink: Unexpected zero-sized "
           "reply from netlink socket.");
       close (fd);
-      value_list_batch_free(batch);
       return (0);
     }
 
@@ -741,7 +646,6 @@ static int conn_read_netlink (void)
       {
         DEBUG ("tcpconns plugin: conn_read_netlink: done!");
         close (fd);
-        value_list_batch_free(batch);
         return (0);
       }
       else if (h->nlmsg_type == NLMSG_ERROR)
@@ -753,7 +657,6 @@ static int conn_read_netlink (void)
             msg_error->error);
 
         close (fd);
-        value_list_batch_free(batch);
         return (1);
       }
 
@@ -782,7 +685,7 @@ static int conn_read_netlink (void)
             if (!inet_ntop(r->idiag_family, r->id.idiag_dst, dst, sizeof(dst)))
               strncpy(dst, "<UNKNOWN>", sizeof(dst));
 
-            conn_handle_tcpi (batch, r->idiag_state, src, sport, dst, dport, tcpi);
+            conn_handle_tcpi (&by_conn_vl, r->idiag_state, src, sport, dst, dport, tcpi);
           }
         }
       }
@@ -793,7 +696,6 @@ static int conn_read_netlink (void)
 
   /* Not reached because the while() loop above handles the exit condition. */
   close(fd);
-  value_list_batch_free(batch);
   return (0);
 #else
   return (1);
