@@ -517,10 +517,11 @@ static void conn_handle_tcpi(value_list_t *vl, uint8_t state,
     : "UNKNOWN";
 
   assert (vl->values != NULL);
-
-  snprintf(vl->plugin_instance, sizeof(vl->plugin_instance),
-      "%s:%u_%s:%u_%s", src, sport, dst, dport, state_name);
-  vl->values[0].gauge = tcpi->tcpi_rtt;
+  snprintf(vl->type_instance, sizeof(vl->type_instance),
+      "%s:%"PRIu16"_%s:%"PRIu16"_%s",
+      src, sport, dst, dport, state_name);
+  /* tcpi_rtt appears to store microseconds; convert it to seconds. */
+  vl->values[0].gauge = 0.000001 * ((gauge_t) tcpi->tcpi_rtt);
 
   plugin_dispatch_values (vl);
 } /* conn_handle_tcpi */
@@ -563,7 +564,7 @@ static int conn_read_netlink (void)
 
   sstrncpy (by_conn_vl.host, hostname_g, sizeof (by_conn_vl.host));
   sstrncpy (by_conn_vl.plugin, "tcpconns", sizeof (by_conn_vl.plugin));
-  sstrncpy (by_conn_vl.type, "tcp_connections_perf", sizeof (by_conn_vl.type));
+  sstrncpy (by_conn_vl.type, "ping", sizeof (by_conn_vl.type));
   by_conn_vl.values = &by_conn_value;
   by_conn_vl.values_len = 1;
 
@@ -644,7 +645,6 @@ static int conn_read_netlink (void)
 
       if (h->nlmsg_type == NLMSG_DONE)
       {
-        DEBUG ("tcpconns plugin: conn_read_netlink: done!");
         close (fd);
         return (0);
       }
