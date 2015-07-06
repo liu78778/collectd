@@ -1,7 +1,7 @@
 /**
  * collectd - src/nfs.c
  * Copyright (C) 2005,2006  Jason Pepas
- * Copyright (C) 2012,2013  Florian Forster
+ * Copyright (C) 2012-2015  Florian Forster
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,8 +26,8 @@
 #include "common.h"
 #include "plugin.h"
 
-#if HAVE_KSTAT_H
-#include <kstat.h>
+#if HAVE_LIBKSTAT
+# include "utils_kstat.h"
 #endif
 
 /*
@@ -169,9 +169,16 @@ static const char *nfs4_procedures_names[] =
 	"write"
 };
 static size_t nfs4_procedures_names_num = STATIC_ARRAY_SIZE (nfs4_procedures_names);
-#endif
 
-#if KERNEL_LINUX
+static kstat_t *nfs2_ksp_client;
+static kstat_t *nfs2_ksp_server;
+static kstat_t *nfs3_ksp_client;
+static kstat_t *nfs3_ksp_server;
+static kstat_t *nfs4_ksp_client;
+static kstat_t *nfs4_ksp_server;
+/* #endif HAVE_LIBKSTAT */
+
+#elif KERNEL_LINUX
 static const char *nfs4_server40_procedures_names[] =
 {
 	"null",
@@ -323,30 +330,31 @@ static const char *nfs4_client41_procedures_names[] =
 
 #define NFS4_CLIENT_MAX_PROC (NFS4_CLIENT41_NUM_PROC)
 
-#endif
+#endif /* KERNEL_LINUX */
 
 #if HAVE_LIBKSTAT
-extern kstat_ctl_t *kc;
-static kstat_t *nfs2_ksp_client;
-static kstat_t *nfs2_ksp_server;
-static kstat_t *nfs3_ksp_client;
-static kstat_t *nfs3_ksp_server;
-static kstat_t *nfs4_ksp_client;
-static kstat_t *nfs4_ksp_server;
-#endif
-
-#if KERNEL_LINUX
-static int nfs_init (void)
+static int nfs_kstat_add (kstat_t *ks, void *unused)
 {
-	return (0);
+	if (strcmp (ks->ks_module, "nfs") != 0)
+		return 0;
+	else if (strcmp (ks->ks_name, "rfsproccnt_v2") == 0)
+		nfs2_ksp_server = ks;
+	else if (strcmp (ks->ks_name, "rfsproccnt_v3") == 0)
+		nfs3_ksp_server = ks;
+	else if (strcmp (ks->ks_name, "rfsproccnt_v4") == 0)
+		nfs4_ksp_server = ks;
+	else if (strcmp (ks->ks_name, "rfsreqcnt_v2") == 0)
+		nfs2_ksp_client = ks;
+	else if (strcmp (ks->ks_name, "rfsreqcnt_v3") == 0)
+		nfs3_ksp_client = ks;
+	else if (strcmp (ks->ks_name, "rfsreqcnt_v4") == 0)
+		nfs4_ksp_client = ks;
+
+	return 0;
 }
-/* #endif KERNEL_LINUX */
 
-#elif HAVE_LIBKSTAT
-static int nfs_init (void)
+static int nfs_kstat_update (void *unused)
 {
-	kstat_t *ksp_chain = NULL;
-
 	nfs2_ksp_client = NULL;
 	nfs2_ksp_server = NULL;
 	nfs3_ksp_client = NULL;
@@ -354,30 +362,8 @@ static int nfs_init (void)
 	nfs4_ksp_client = NULL;
 	nfs4_ksp_server = NULL;
 
-	if (kc == NULL)
-		return (-1);
-
-	for (ksp_chain = kc->kc_chain; ksp_chain != NULL;
-			ksp_chain = ksp_chain->ks_next)
-	{
-		if (strncmp (ksp_chain->ks_module, "nfs", 3) != 0)
-			continue;
-		else if (strncmp (ksp_chain->ks_name, "rfsproccnt_v2", 13) == 0)
-			nfs2_ksp_server = ksp_chain;
-		else if (strncmp (ksp_chain->ks_name, "rfsproccnt_v3", 13) == 0)
-			nfs3_ksp_server = ksp_chain;
-		else if (strncmp (ksp_chain->ks_name, "rfsproccnt_v4", 13) == 0)
-			nfs4_ksp_server = ksp_chain;
-		else if (strncmp (ksp_chain->ks_name, "rfsreqcnt_v2", 12) == 0)
-			nfs2_ksp_client = ksp_chain;
-		else if (strncmp (ksp_chain->ks_name, "rfsreqcnt_v3", 12) == 0)
-			nfs3_ksp_client = ksp_chain;
-		else if (strncmp (ksp_chain->ks_name, "rfsreqcnt_v4", 12) == 0)
-			nfs4_ksp_client = ksp_chain;
-	}
-
-	return (0);
-} /* int nfs_init */
+	return ukstat_foreach (nfs_kstat_add, NULL);
+}
 #endif
 
 static void nfs_procedures_submit (const char *plugin_instance,
@@ -616,19 +602,19 @@ static int nfs_read_kstat (kstat_t *ksp, int nfs_version, char *inst,
 	ssnprintf (plugin_instance, sizeof (plugin_instance), "v%i%s",
 			nfs_version, inst);
 
-	kstat_read(kc, ksp, NULL);
+	ukstat_read (ksp, NULL);
+
 	for (i = 0; i < proc_names_num; i++)
 	{
 		/* The name passed to kstat_data_lookup() doesn't have the
 		 * "const" modifier, so we need to copy the name here. */
-		char name[32];
-		sstrncpy (name, proc_names[i], sizeof (name));
+		char name[DATA_MAX_NAME_LEN];
 
-		values[i].counter = (derive_t) get_kstat_value (ksp, name);
+		sstrncpy (name, proc_names[i], sizeof (name));
+		ukstat_derive (ksp, name, &values[i].derive);
 	}
 
-	nfs_procedures_submit (plugin_instance, proc_names, values,
-			proc_names_num);
+	nfs_procedures_submit (plugin_instance, proc_names, values, proc_names_num);
 	return (0);
 }
 #endif
@@ -676,6 +662,5 @@ static int nfs_read (void)
 
 void module_register (void)
 {
-	plugin_register_init ("nfs", nfs_init);
 	plugin_register_read ("nfs", nfs_read);
 } /* void module_register */
