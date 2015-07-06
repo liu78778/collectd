@@ -1,7 +1,7 @@
 /**
  * collectd - src/processes.c
  * Copyright (C) 2005       Lyonel Vincent
- * Copyright (C) 2006-2010  Florian octo Forster
+ * Copyright (C) 2006-2015  Florian octo Forster
  * Copyright (C) 2008       Oleg King
  * Copyright (C) 2009       Sebastian Harl
  * Copyright (C) 2009       Andrés J. Díaz
@@ -116,18 +116,19 @@
  * _FILE_OFFSET_BITS=64. There is a reason for this #error, as one
  * of the structures in <sys/procfs.h> uses an off_t, but that
  * isn't relevant to our usage of procfs. */
-#if !defined(_LP64) && _FILE_OFFSET_BITS == 64
-#  define SAVE_FOB_64
-#  undef _FILE_OFFSET_BITS
-#endif
+# if !defined(_LP64) && _FILE_OFFSET_BITS == 64
+#   define SAVE_FOB_64
+#   undef _FILE_OFFSET_BITS
+# endif
 
 # include <procfs.h>
 
-#ifdef SAVE_FOB_64
-#  define _FILE_OFFSET_BITS 64
-#  undef SAVE_FOB_64
-#endif
+# ifdef SAVE_FOB_64
+#   define _FILE_OFFSET_BITS 64
+#   undef SAVE_FOB_64
+# endif
 
+# include "utils_kstat.h"
 # include <dirent.h>
 /* #endif KERNEL_SOLARIS */
 
@@ -137,10 +138,6 @@
 
 #if HAVE_REGEX_H
 # include <regex.h>
-#endif
-
-#if HAVE_KSTAT_H
-# include <kstat.h>
 #endif
 
 #ifndef CMDLINE_BUFFER_SIZE
@@ -251,7 +248,11 @@ int     getprocs64 (void *procsinfo, int sizproc, void *fdsinfo, int sizfd, pid_
 int     getthrds64( pid_t, void *, int, tid64_t *, int );
 #endif
 int getargs (void *processBuffer, int bufferLen, char *argsBuffer, int argsLen);
-#endif /* HAVE_PROCINFO_H */
+/* #endif HAVE_PROCINFO_H */
+
+#elif KERNEL_SOLARIS
+/* no global variables */
+#endif /* KERNEL_SOLARIS */
 
 /* put name of process from config to list_head_g tree
  * list_head_g is a list of 'procstat_t' structs with
@@ -1467,34 +1468,40 @@ static int ps_read_process(long pid, procstat_t *ps, char *state)
  * are retrieved from kstat (module cpu, name sys, class misc, stat nthreads).
  * The result is the sum for all the threads created on each cpu
  */
+static int kstat_callback (kstat_t *ks, void *data)
+{
+	derive_t *v = data;
+	derive_t n;
+
+	if ((strcmp (ks->ks_module, "cpu") != 0)
+			|| (strcmp (ks->ks_name, "sys") != 0)
+			|| (strcmp (ks->ks_class, "misc") != 0))
+		return 0;
+
+	if (ukstat_read (ks, NULL) == -1)
+		return 0;
+
+	if (ukstat_derive (ks, "nthreads", &n) != 0)
+		return 0;
+
+	*v += n;
+	return 0;
+}
+
 static int read_fork_rate()
 {
-	extern kstat_ctl_t *kc;
-	kstat_t *ksp_chain = NULL;
-	derive_t result = 0;
+	derive_t v = 0;
+	int status;
 
-	if (kc == NULL)
-		return (-1);
+	status = ukstat_update (NULL, NULL);
+	if (status != 0)
+		return status;
 
-	for (ksp_chain = kc->kc_chain;
-			ksp_chain != NULL;
-			ksp_chain = ksp_chain->ks_next)
-	{
-		if ((strcmp (ksp_chain->ks_module, "cpu") == 0)
-				&& (strcmp (ksp_chain->ks_name, "sys") == 0)
-				&& (strcmp (ksp_chain->ks_class, "misc") == 0))
-		{
-			long long tmp;
+	status = ukstat_foreach (kstat_callback, &v);
+	if (status != 0)
+		return status;
 
-			kstat_read (kc, ksp_chain, NULL);
-
-			tmp = get_kstat_value(ksp_chain, "nthreads");
-			if (tmp != -1LL)
-				result += tmp;
-		}
-	}
-
-	ps_submit_fork_rate (result);
+	ps_submit_fork_rate (v);
 	return (0);
 }
 #endif /* KERNEL_SOLARIS */
