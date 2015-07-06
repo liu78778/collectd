@@ -1,6 +1,6 @@
 /**
  * collectd - src/interface.c
- * Copyright (C) 2005-2010  Florian octo Forster
+ * Copyright (C) 2005-2015  Florian octo Forster
  * Copyright (C) 2009       Manuel Sanmartin
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,10 @@
 #include "plugin.h"
 #include "configfile.h"
 #include "utils_ignorelist.h"
+
+#ifdef HAVE_LIBKSTAT
+# include "utils_kstat.h"
+#endif
 
 #if HAVE_SYS_TYPES_H
 #  include <sys/types.h>
@@ -95,9 +99,8 @@ static ignorelist_t *ignorelist = NULL;
 
 #ifdef HAVE_LIBKSTAT
 #define MAX_NUMIF 256
-extern kstat_ctl_t *kc;
 static kstat_t *ksp[MAX_NUMIF];
-static int numif = 0;
+static size_t ksp_len = 0;
 #endif /* HAVE_LIBKSTAT */
 
 static int interface_config (const char *key, const char *value)
@@ -125,33 +128,25 @@ static int interface_config (const char *key, const char *value)
 }
 
 #if HAVE_LIBKSTAT
-static int interface_init (void)
+static int if_kstat_add (kstat_t *ks, void *unused)
 {
-	kstat_t *ksp_chain;
-	derive_t val;
+	if (ksp_len >= STATIC_ARRAY_SIZE (ksp))
+		return ENOMEM;
 
-	numif = 0;
+	if ((strcmp (ks->ks_class, "net") != 0) || (ks->ks_type != KSTAT_TYPE_NAMED))
+		return 0;
 
-	if (kc == NULL)
-		return (-1);
+	ksp[ksp_len++] = ks;
+	return 0;
+}
 
-	for (numif = 0, ksp_chain = kc->kc_chain;
-			(numif < MAX_NUMIF) && (ksp_chain != NULL);
-			ksp_chain = ksp_chain->ks_next)
-	{
-		if (strncmp (ksp_chain->ks_class, "net", 3))
-			continue;
-		if (ksp_chain->ks_type != KSTAT_TYPE_NAMED)
-			continue;
-		if (kstat_read (kc, ksp_chain, NULL) == -1)
-			continue;
-		if ((val = get_kstat_value (ksp_chain, "obytes")) == -1LL)
-			continue;
-		ksp[numif++] = ksp_chain;
-	}
+static int if_kstat_update (void *unused)
+{
+	ksp_len = 0;
+	memset (ksp, 0, sizeof (ksp));
 
-	return (0);
-} /* int interface_init */
+	return ukstat_foreach (if_kstat_add, NULL);
+}
 #endif /* HAVE_LIBKSTAT */
 
 static void if_submit (const char *dev, const char *type,
@@ -285,44 +280,28 @@ static int interface_read (void)
 /* #endif KERNEL_LINUX */
 
 #elif HAVE_LIBKSTAT
-	int i;
-	derive_t rx;
-	derive_t tx;
+	size_t i;
 
-	if (kc == NULL)
-		return (-1);
+	ukstat_update (if_kstat_update, NULL);
 
-	for (i = 0; i < numif; i++)
+	for (i = 0; i < ksp_len; i++)
 	{
-		if (kstat_read (kc, ksp[i], NULL) == -1)
+		derive_t rx;
+		derive_t tx;
+
+		if (ukstat_read (ksp[i], NULL) == -1)
 			continue;
 
-		/* try to get 64bit counters */
-		rx = get_kstat_value (ksp[i], "rbytes64");
-		tx = get_kstat_value (ksp[i], "obytes64");
-		/* or fallback to 32bit */
-		if (rx == -1LL)
-			rx = get_kstat_value (ksp[i], "rbytes");
-		if (tx == -1LL)
-			tx = get_kstat_value (ksp[i], "obytes");
-		if ((rx != -1LL) || (tx != -1LL))
+		if (((ukstat_derive (ksp[i], "rbytes64", &rx) == 0) && (ukstat_derive (ksp[i], "obytes64", &tx) == 0))
+				|| ((ukstat_derive (ksp[i], "rbytes", &rx) == 0) && (ukstat_derive (ksp[i], "obytes", &tx) == 0)))
 			if_submit (ksp[i]->ks_name, "if_octets", rx, tx);
 
-		/* try to get 64bit counters */
-		rx = get_kstat_value (ksp[i], "ipackets64");
-		tx = get_kstat_value (ksp[i], "opackets64");
-		/* or fallback to 32bit */
-		if (rx == -1LL)
-			rx = get_kstat_value (ksp[i], "ipackets");
-		if (tx == -1LL)
-			tx = get_kstat_value (ksp[i], "opackets");
-		if ((rx != -1LL) || (tx != -1LL))
+		if (((ukstat_derive (ksp[i], "rpackets64", &rx) == 0) && (ukstat_derive (ksp[i], "opackets64", &tx) == 0))
+				|| ((ukstat_derive (ksp[i], "rpackets", &rx) == 0) && (ukstat_derive (ksp[i], "opackets", &tx) == 0)))
 			if_submit (ksp[i]->ks_name, "if_packets", rx, tx);
 
-		/* no 64bit error counters yet */
-		rx = get_kstat_value (ksp[i], "ierrors");
-		tx = get_kstat_value (ksp[i], "oerrors");
-		if ((rx != -1LL) || (tx != -1LL))
+		/* there are no 64bit error counters for errors */
+		if ((ukstat_derive (ksp[i], "ierrors", &rx) == 0) && (ukstat_derive (ksp[i], "oerrors", &tx) == 0))
 			if_submit (ksp[i]->ks_name, "if_errors", rx, tx);
 	}
 /* #endif HAVE_LIBKSTAT */
@@ -381,8 +360,5 @@ void module_register (void)
 {
 	plugin_register_config ("interface", interface_config,
 			config_keys, config_keys_num);
-#if HAVE_LIBKSTAT
-	plugin_register_init ("interface", interface_init);
-#endif
 	plugin_register_read ("interface", interface_read);
 } /* void module_register */
