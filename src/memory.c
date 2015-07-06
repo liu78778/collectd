@@ -1,6 +1,6 @@
 /**
  * collectd - src/memory.c
- * Copyright (C) 2005-2014  Florian octo Forster
+ * Copyright (C) 2005-2015  Florian octo Forster
  * Copyright (C) 2009       Simon Kuhnle
  * Copyright (C) 2009       Manuel Sanmartin
  *
@@ -26,6 +26,10 @@
 #include "collectd.h"
 #include "common.h"
 #include "plugin.h"
+
+#if HAVE_LIBKSTAT
+# include "utils_kstat.h"
+#endif
 
 #ifdef HAVE_SYS_SYSCTL_H
 # include <sys/sysctl.h>
@@ -74,8 +78,8 @@ static vm_size_t pagesize;
 /* #endif KERNEL_LINUX */
 
 #elif HAVE_LIBKSTAT
-static int pagesize;
 static kstat_t *ksp;
+static gauge_t pagesize;
 /* #endif HAVE_LIBKSTAT */
 
 #elif HAVE_SYSCTL
@@ -94,6 +98,38 @@ static int pagesize;
 
 static _Bool values_absolute = 1;
 static _Bool values_percentage = 0;
+
+/*
+ * Auxilliary functions
+ */
+#if HAVE_HOST_STATISTICS
+/* #endif HAVE_HOST_STATISTICS */
+
+#elif HAVE_SYSCTLBYNAME
+/* #endif HAVE_SYSCTLBYNAME */
+
+#elif defined(KERNEL_LINUX)
+/* #endif KERNEL_LINUX */
+
+#elif defined(HAVE_LIBKSTAT)
+static int memory_update_kstat (void *unused)
+{
+	ksp = ukstat_lookup ("unix", 0, "system_pages");
+	if (ksp == NULL)
+		return ENOENT;
+
+	return 0;
+} /* }}} int memory_update_kstat */
+/* #endif HAVE_LIBKSTAT */
+
+#elif HAVE_SYSCTL
+/* #endif HAVE_SYSCTL */
+
+#elif HAVE_LIBSTATGRAB
+/* #endif HAVE_LIBSTATGRAB */
+
+#elif HAVE_PERFSTAT
+#endif /* HAVE_PERFSTAT */
 
 static int memory_config (oconfig_item_t *ci) /* {{{ */
 {
@@ -131,12 +167,7 @@ static int memory_init (void)
 
 #elif defined(HAVE_LIBKSTAT)
 	/* getpagesize(3C) tells me this does not fail.. */
-	pagesize = getpagesize ();
-	if (get_kstat (&ksp, "unix", 0, "system_pages") != 0)
-	{
-		ksp = NULL;
-		return (-1);
-	}
+	pagesize = (gauge_t) getpagesize ();
 /* #endif HAVE_LIBKSTAT */
 
 #elif HAVE_SYSCTL
@@ -366,38 +397,35 @@ static int memory_read_internal (value_list_t *vl)
 #elif HAVE_LIBKSTAT
 	/* Most of the additions here were taken as-is from the k9toolkit from
 	 * Brendan Gregg and are subject to change I guess */
-	long long mem_used;
-	long long mem_free;
-	long long mem_lock;
-	long long mem_kern;
-	long long mem_unus;
+	gauge_t pagestotal;
+	gauge_t pagesfree;
+	gauge_t pageslocked;
+	gauge_t pp_kernel;
+	gauge_t physmem;
+	gauge_t availrmem;
 
-	long long pp_kernel;
-	long long physmem;
-	long long availrmem;
+	gauge_t used;
+	gauge_t kernel;
+	gauge_t unusable;
+	int status;
 
-	if (ksp == NULL)
-		return (-1);
+	status = ukstat_update (memory_update_kstat, NULL);
+	if (status != 0)
+		return status;
 
-	mem_used = get_kstat_value (ksp, "pagestotal");
-	mem_free = get_kstat_value (ksp, "pagesfree");
-	mem_lock = get_kstat_value (ksp, "pageslocked");
-	mem_kern = 0;
-	mem_unus = 0;
+	if (ukstat_read (ksp, NULL) == -1)
+		return -1;
 
-	pp_kernel = get_kstat_value (ksp, "pp_kernel");
-	physmem = get_kstat_value (ksp, "physmem");
-	availrmem = get_kstat_value (ksp, "availrmem");
+	if ((ukstat_gauge (ksp, "pagestotal", &pagestotal) != 0)
+			|| (ukstat_gauge (ksp, "pagesfree", &pagesfree) != 0)
+			|| (ukstat_gauge (ksp, "pageslocked", &pageslocked) != 0)
+			|| (ukstat_gauge (ksp, "pp_kernel", &pp_kernel) != 0)
+			|| (ukstat_gauge (ksp, "physmem", &physmem) != 0)
+			|| (ukstat_gauge (ksp, "availrmem", &availrmem) != 0))
+		return -1;
 
-	if ((mem_used < 0LL) || (mem_free < 0LL) || (mem_lock < 0LL))
-	{
-		WARNING ("memory plugin: one of used, free or locked is negative.");
-		return (-1);
-	}
-
-	mem_unus = physmem - mem_used;
-
-	if (mem_used < (mem_free + mem_lock))
+	unusable = physmem - pagestotal;
+	if (pagestotal < (pagesfree + pageslocked))
 	{
 		/* source: http://wesunsolve.net/bugid/id/4909199
 		 * this seems to happen when swap space is small, e.g. 2G on a 32G system
@@ -406,37 +434,31 @@ static int memory_read_internal (value_list_t *vl)
 		DEBUG ("memory plugin: pages total is smaller than \"free\" "
 				"+ \"locked\". This is probably due to small "
 				"swap space");
-		mem_free = availrmem;
-		mem_used = 0;
+		pagesfree = availrmem;
+		used = 0;
 	}
 	else
 	{
-		mem_used -= mem_free + mem_lock;
+		used = pagestotal - (pagesfree + pageslocked);
 	}
 
-	/* mem_kern is accounted for in mem_lock */
-	if (pp_kernel < mem_lock)
+	/* kernel is accounted for in pageslocked */
+	if (pp_kernel < pageslocked)
 	{
-		mem_kern = pp_kernel;
-		mem_lock -= pp_kernel;
+		kernel = pp_kernel;
+		pageslocked -= pp_kernel;
 	}
 	else
 	{
-		mem_kern = mem_lock;
-		mem_lock = 0;
+		kernel = pageslocked;
+		pageslocked = 0;
 	}
 
-	mem_used *= pagesize; /* If this overflows you have some serious */
-	mem_free *= pagesize; /* memory.. Why not call me up and give me */
-	mem_lock *= pagesize; /* some? ;) */
-	mem_kern *= pagesize; /* it's 2011 RAM is cheap */
-	mem_unus *= pagesize;
-
-	MEMORY_SUBMIT ("used",     (gauge_t) mem_used,
-	               "free",     (gauge_t) mem_free,
-	               "locked",   (gauge_t) mem_lock,
-	               "kernel",   (gauge_t) mem_kern,
-	               "unusable", (gauge_t) mem_unus);
+	MEMORY_SUBMIT ("used",     pagesize * used,
+	               "free",     pagesize * pagesfree,
+	               "locked",   pagesize * pageslocked,
+	               "kernel",   pagesize * kernel,
+	               "unusable", pagesize * unusable);
 /* #endif HAVE_LIBKSTAT */
 
 #elif HAVE_SYSCTL
