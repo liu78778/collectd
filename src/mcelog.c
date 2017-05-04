@@ -163,8 +163,7 @@ static void mcelog_dispatch_notification(notification_t *n) {
   sstrncpy(n->host, hostname_g, sizeof(n->host));
   sstrncpy(n->type, "gauge", sizeof(n->type));
   plugin_dispatch_notification(n);
-  if (n->meta)
-    plugin_notification_meta_free(n->meta);
+  plugin_notification_meta_free(n->meta);
 }
 
 static int socket_reinit(socket_adapter_t *self) {

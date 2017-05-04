@@ -2429,33 +2429,22 @@ int plugin_notification_meta_copy(notification_t *dst,
   return (0);
 } /* int plugin_notification_meta_copy */
 
-int plugin_notification_meta_free(notification_meta_t *n) {
-  notification_meta_t *this;
-  notification_meta_t *next;
+void plugin_notification_meta_free(notification_meta_t *n) {
+  while (n != NULL) {
+    notification_meta_t *next = n->next;
 
-  if (n == NULL) {
-    ERROR("plugin_notification_meta_free: n == NULL!");
-    return (-1);
-  }
-
-  this = n;
-  while (this != NULL) {
-    next = this->next;
-
-    if (this->type == NM_TYPE_STRING) {
+    if (n->type == NM_TYPE_STRING) {
       /* Assign to a temporary variable to work around nm_string's const
        * modifier. */
-      void *tmp = (void *)this->nm_value.nm_string;
+      void *tmp = (void *)n->nm_value.nm_string;
 
       sfree(tmp);
-      this->nm_value.nm_string = NULL;
+      n->nm_value.nm_string = NULL;
     }
-    sfree(this);
+    sfree(n);
 
-    this = next;
+    n = next;
   }
-
-  return (0);
 } /* int plugin_notification_meta_free */
 
 static void plugin_ctx_destructor(void *ctx) {

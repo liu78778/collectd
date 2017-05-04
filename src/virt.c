@@ -628,8 +628,7 @@ static void submit_notif(const virDomainPtr domain, int severity,
 
   init_notif(&notif, domain, severity, msg, type, type_instance);
   plugin_dispatch_notification(&notif);
-  if (notif.meta)
-    plugin_notification_meta_free(notif.meta);
+  plugin_notification_meta_free(notif.meta);
 }
 
 static void submit(virDomainPtr dom, char const *type,
@@ -1377,8 +1376,7 @@ static int fs_info_notify(virDomainPtr domain, virDomainFSInfoPtr fs_info) {
   plugin_dispatch_notification(&notif);
 
 cleanup:
-  if (notif.meta)
-    plugin_notification_meta_free(notif.meta);
+  plugin_notification_meta_free(notif.meta);
   return ret;
 }
 
@@ -1802,9 +1800,9 @@ static int lv_instance_include_domain(struct lv_read_instance *inst,
   we can't detect this.
  */
 #ifdef LIBVIR_CHECK_VERSION
-# if LIBVIR_CHECK_VERSION(0,10,2)
-#  define HAVE_LIST_ALL_DOMAINS 1
-# endif
+#if LIBVIR_CHECK_VERSION(0, 10, 2)
+#define HAVE_LIST_ALL_DOMAINS 1
+#endif
 #endif
 
 static int refresh_lists(struct lv_read_instance *inst) {
@@ -1822,7 +1820,8 @@ static int refresh_lists(struct lv_read_instance *inst) {
   if (n > 0) {
 #ifdef HAVE_LIST_ALL_DOMAINS
     virDomainPtr *domains;
-    n = virConnectListAllDomains (conn, &domains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
+    n = virConnectListAllDomains(conn, &domains,
+                                 VIR_CONNECT_LIST_DOMAINS_ACTIVE);
 #else
     int *domids;
 
@@ -2007,7 +2006,7 @@ static int refresh_lists(struct lv_read_instance *inst) {
     }
 
 #ifdef HAVE_LIST_ALL_DOMAINS
-    sfree (domains);
+    sfree(domains);
 #else
     sfree(domids);
 #endif

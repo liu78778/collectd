@@ -732,8 +732,7 @@ static void *exec_notification_one(void *arg) /* {{{ */
 
   DEBUG("exec plugin: Child %i exited with status %i.", pid, status);
 
-  if (n->meta != NULL)
-    plugin_notification_meta_free(n->meta);
+  plugin_notification_meta_free(n->meta);
   n->meta = NULL;
   sfree(arg);
   pthread_exit((void *)0);
